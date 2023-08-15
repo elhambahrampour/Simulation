@@ -1,0 +1,260 @@
+---
+title: "Simulation: dWOLS Estimators"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    fig_caption: yes
+    theme: cerulean
+    self_contained: true
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(dplyr)
+library(tidyr) 
+library(tidyverse)
+
+## Function simABS to estimate the dWOLS
+dWOLSABS <- function(samp.size, nsim) {
+  library(DTRreg)
+  expit <- function(x) {1/(1+exp(-x))}
+  est <- matrix(rep(NA, 12*nsim), nrow = nsim, ncol = 12)
+  
+  for (i in 1:length(samp.size)) {
+    n <- samp.size[i]
+    for (j in 1:nsim) {
+      X1 <- rnorm(n)
+      X2 <- rnorm(n, 1.25*X1, 1)
+      C1 <- rbinom(n,1,0.5)
+      C2 <- rnorm(n, -0.5, 0.5)
+      A1 <- rbinom(n,1,expit(X1+C1+C2))
+      A2 <- rbinom(n,1,expit(X2+C1+C2))
+      A1opt <- as.numeric(1+X1>0)
+      A2opt <- as.numeric(1+X2>0)
+      mu1 <- (A1opt-A1)*(1+X1)
+      mu2 <- (A2opt-A2)*(1+X2)
+      epsilon <- rnorm(n)
+      Yopt <- exp(X1)+X1^3+C1+C2
+      Y <- Yopt-mu1-mu2+epsilon
+      mydata <- data.frame(X1, X2, A1, A2, C1, C2, Y)
+      
+      #DTR treatment and tf correct - analysis1
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~X1+C1+C2,A2~X2+C1+C2)
+      tf.mod <- list(~exp(X1)+I(X1^3)+C1+C2+A1opt+A1opt*X1, ~exp(X1)+I(X1^3)+C1+C2+A1+A1*X1+A1opt+A1opt*X1+A2opt+A2opt*X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est1 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      #DTR treatment correct - analysis2
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~X1+C1+C2,A2~X2+C1+C2)
+      tf.mod <- list(~X1, ~X1+X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est2 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      #DTR tf correct - analysis3
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~1,A2~1)
+      tf.mod <- list(~exp(X1)+I(X1^3)+C1+C2+A1opt+A1opt*X1, ~exp(X1)+I(X1^3)+C1+C2+A1+A1*X1+A1opt+A1opt*X1+A2opt+A2opt*X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est3 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      est[j,] <- cbind(est1, est2, est3)
+    }
+  mypath <- paste0("/Users/elhambahrampour/Desktop/Portfolio Projects/Project 2 - Simulation - CI/EstABS", n, ".csv")
+  write.csv(est, mypath, row.names=T)
+  }
+  return() }
+
+newabs <- read.csv("/Users/elhambahrampour/Desktop/Portfolio Projects/Project 2 - Simulation - CI/newabs.csv",header=T)
+```
+
+In this project, we conduct a simulation study to explore if the dWOLS estimators are doubly-robust. In the second part, we investigate the impact of a violation of No Unmeasured Confounding (NUC) assumption on these estimators.
+
+In causal inference studies, there are different methods to estimate the optimal Dynamic Treatment Regimes (DTRs). A DTR utilizes statistical tools to learn from data and personalizes treatment to optimize treatment decisions. The dynamic Weighted Ordinary Least Squares (dWOLS) method is a regression-based approach to estimating the parameters of a DTR.
+
+The dWOLS approach associates specific weights to observations and fits a weighted regression model for the outcome given (i.e., conditional on) the covariates and treatment allowing for interactions between treatment and a subset of these covariates.
+In this project, we use the absolute value weights.
+
+One of the features of the dWOLS estimators is that they are doubly-robust in that the estimators are consistent if at least one of the treatment or treatment-free models is correctly specified under the NUC assumption.
+In first section, we examine this property by a simulation study. In the second section, we assume that NUC assumption is violated and explore how this violation affects the dWOLS estimators.
+
+# Doubly-Robust dWOLS Estimators
+We first present a detailed outline of the simulation study plan, following the ADEMP guidelines including the Data Generating Mechanism (DGM), simulation estimand, estimation method, performance metrics, and the results.
+
+## DGM
+The following DGM is a two stage example including with a single covariate at each stage ($X_1$ and $X_2$), binary treatment at stage one and two ($A_1$ and $A_2$), and two potentially unmeasured confounders ($C_1$ and $C_2$):
+\begin{align*}
+     C_1 &\sim \mathrm{Ber}(0.5) \\
+     C_2 &\sim \mathrm{N}(-0.5,0.5) \\
+     X_1 &\sim \mathrm{N}(0, 1) \\
+     X_2|X_1=x_1 &\sim \mathrm{N}(1.25x_1, 1) \\
+     A_1|X_1=x_1, C_1=c_1, C_2=c_2 &\sim \mathrm{Ber}(\mathrm{expit}(x_1+c_1+c_2)) \\
+     A_2|X_2=x_2, C_1=c_1, C_2=c_2 &\sim  \mathrm{Ber}(\mathrm{expit}(x_2+c_1+c_2))\\
+     Y|A_1=a_1, X_1=x_1, A_2=a_2, X_2=x_2, C_1=c_1, C_2=c_2 
+     &\sim  \mathrm{N}(\mathrm{exp}(X_1)+X_1^3+C_1+C_2-\mu_1-\mu_2, 1).
+\end{align*}
+where $\mathrm{expit}(u)=\frac{\mathrm{exp}(u)}{1+\mathrm{exp}(u)}$, $\mathrm{A}^{opt}_i= 1_{1+x_i>0}$, and $\mu_i=(A^{opt}_i-A_i)(1+X_i)$ for $i \in \{1,2\}.$
+
+## Estimand, Methods, and Performance
+
+The true parameters are $\psi_{10}=\psi_{11}=\psi_{20}=\psi_{21}=1$. For two different sample sizes of 1000 and 5000, we generated 500 datasets. In each iteration, we computed the dWOLS estimates using absolute value weights specified as $w(A,X) = |A − P(A = 1|X)|$. The following three analyses were considered to examine the doubly-robust property of dWOLS estimators: 
+
+ - Analysis 1: treatment model and treatment-free model are correctly specified
+ 
+ - Analysis 2: only treatment model is correctly specified
+ 
+ - Analysis 3: only treatment-free model is correctly specified.
+
+
+In this example where outcome mean model is 
+\begin{equation*}
+\begin{split}
+E(Y|X_1,A_1,X_2,A_2,C_1,C_2) &=\mathrm{exp}(X_1)+X_1^3+C_1+C_2-A^{opt}_1 (1+X_1) \\ 
+& \hspace{10pt}+ A_1 (1+X_1)-A^{opt}_2 (1+X_2)+A_2 (1+X_2),\\
+\end{split}
+\end{equation*}
+
+and the correct model specifications are as follows:
+
+ - Treatment model at stage one: $A_1\sim X_1+C_1+C_2$  
+
+ - Treatment-free model at stage one: $\sim \mathrm{exp}(X_1)+X_1^3+C_1+C_2-A_1^{opt}-A_1^{opt}X_1$
+
+ - Treatment model at stage two:  $A_2\sim X_2+C_1+C_2$
+
+ - Treatment-free model at stage two: $\sim \mathrm{exp}(X_1)+X_1^3+C_1+C_2+A_1 (1+X_1)-A_1^{opt}(1+X_1)-A_2^{opt}(1+X_2).$
+
+## Results
+
+Following figure illustrates the estimated dWOLS parameters under the 3 analyses and the larger sample size results in less variability, as would be expected. As one can see the dWOLS estimates are unbiased using these 3 analyses. It shows that estimators obtained from the dWOLS method are doubly-robust, i.e., the dWOLS estimators are consistent if at least one of the treatment or treatment-free models is correctly specified. This is precisely what we demonstrated here. 
+
+```{r}
+############## Plots  ##############
+library(ggplot2)
+Estimator_names <- c(
+  `psi10` = "hat(psi)[10]",
+  `psi11` = "hat(psi)[11]",
+  `psi20` = "hat(psi)[20]",
+  `psi21` = "hat(psi)[21]")
+
+N_names <- c(
+  `1000` = "N:1000",
+  `5000` = "N:5000")
+
+figure <- ggplot(newabs, aes(x=Analysis, y=Value)) + 
+  geom_boxplot() +
+  facet_grid(Estimator ~ N,
+             labeller = labeller(Estimator  = as_labeller(Estimator_names,  label_parsed),
+                                 N = as_labeller(N_names,  label_parsed))) +
+  labs(title="Absolute Value Weights", x="", y = "") +
+  geom_hline(yintercept = 1, linetype='dashed', color='blue'); figure
+```
+
+ 
+## dWOLS Function
+
+Following code is the function to simulate data and obtain estimators by dWOLS method. In this function, we have used the package DTRreg which is designed to calculate the dWOLS estimators for different weights. 
+```{r}
+## Function simABS to estimate the dWOLS
+dWOLSABS <- function(samp.size, nsim) {
+  library(DTRreg)
+  expit <- function(x) {1/(1+exp(-x))}
+  est <- matrix(rep(NA, 12*nsim), nrow = nsim, ncol = 12)
+  
+  for (i in 1:length(samp.size)) {
+    n <- samp.size[i]
+    for (j in 1:nsim) {
+      X1 <- rnorm(n)
+      X2 <- rnorm(n, 1.25*X1, 1)
+      C1 <- rbinom(n,1,0.5)
+      C2 <- rnorm(n, -0.5, 0.5)
+      A1 <- rbinom(n,1,expit(X1+C1+C2))
+      A2 <- rbinom(n,1,expit(X2+C1+C2))
+      A1opt <- as.numeric(1+X1>0)
+      A2opt <- as.numeric(1+X2>0)
+      mu1 <- (A1opt-A1)*(1+X1)
+      mu2 <- (A2opt-A2)*(1+X2)
+      epsilon <- rnorm(n)
+      Yopt <- exp(X1)+X1^3+C1+C2
+      Y <- Yopt-mu1-mu2+epsilon
+      mydata <- data.frame(X1, X2, A1, A2, C1, C2, Y)
+      
+      #DTR treatment and tf correct - analysis1
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~X1+C1+C2,A2~X2+C1+C2)
+      tf.mod <- list(~exp(X1)+I(X1^3)+C1+C2+A1opt+A1opt*X1, ~exp(X1)+I(X1^3)+C1+C2+A1+A1*X1+A1opt+A1opt*X1+A2opt+A2opt*X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est1 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      #DTR treatment correct - analysis2
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~X1+C1+C2,A2~X2+C1+C2)
+      tf.mod <- list(~X1, ~X1+X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est2 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      #DTR tf correct - analysis3
+      blip.mod <- list(~X1,~X2)
+      treat.mod <- list(A1~1,A2~1)
+      tf.mod <- list(~exp(X1)+I(X1^3)+C1+C2+A1opt+A1opt*X1, ~exp(X1)+I(X1^3)+C1+C2+A1+A1*X1+A1opt+A1opt*X1+A2opt+A2opt*X2)
+      mod <- DTRreg(Y, blip.mod, treat.mod, tf.mod, method = "dwols")
+      est3 <- cbind(mod$psi[[1]][1], mod$psi[[1]][2], mod$psi[[2]][1], mod$psi[[2]][2])
+      
+      est[j,] <- cbind(est1, est2, est3)
+    }
+  mypath <- paste0("/Users/elhambahrampour/Desktop/Portfolio Projects/Project 2 - Simulation - CI/EstABS", n, ".csv")
+  write.csv(est, mypath, row.names=T)
+  }
+  return() }
+```
+ 
+
+# Impact of NUC Violation on dOWLS
+
+In this section, we demonstrate the impact of misspecifications of the model including those that arise due to missing confounders. 
+
+In this section, we are interested in assessing how omitting a confounder affects the dWOLS estimators. 
+Again, for two different sample sizes of 1000 and 5000, we generated 500 datasets. In each iteration, we computed the dWOLS estimates using absolute value weights, however, we considered omitting both confounders from the model specifications. Note that in this setting, the treatment and treatment-free models are all misspecified by omitting confounder $C_1$ and $C_2$ and also the optimal terms. We considered the same three analyses as previous section with different forms of model misspecification to explore the impact on the resulting dWOLS estimates. The model specifications are as follows:
+
+ - Treatment model at stage one: $A_1\sim X_1$  
+
+ - Treatment-free model at stage one: $\sim \mathrm{exp}(X_1)+X_1^3$
+
+ - Treatment model at stage two:  $A_2\sim X_2$
+
+ - Treatment-free model at stage two: $\sim \mathrm{exp}(X_1)+X_1^3+A_1 (1+X_1).$
+
+Results are shown for each sample size. The box-plots in following figure show the estimated blip parameters and the true value of the parameters is indicated by a dashed horizontal line.
+In terms of the model performance, omitting both $C_1$ and $C_2$ introduces bias in the dWOLS estimates. A similar trend is observed
+for both sample sizes, except, variability decreased when the sample size is larger.
+
+```{r, echo=FALSE}
+############## Plots  ##############
+newabs <- read.csv("/Users/elhambahrampour/Desktop/Portfolio Projects/Project 2 - Simulation - CI/newabsnuc.csv",header=T)
+library(ggplot2)
+Estimator_names <- c(
+  `psi10` = "hat(psi)[10]",
+  `psi11` = "hat(psi)[11]",
+  `psi20` = "hat(psi)[20]",
+  `psi21` = "hat(psi)[21]")
+
+N_names <- c(
+  `1000` = "N:1000",
+  `5000` = "N:5000")
+
+figure <- ggplot(newabs, aes(x=Analysis, y=Value)) + 
+  geom_boxplot() +
+  facet_grid(Estimator ~ N,
+             labeller = labeller(Estimator  = as_labeller(Estimator_names,  label_parsed),
+                                 N = as_labeller(N_names,  label_parsed))) +
+  labs(title="Absolute Value Weights", x="", y = "") +
+  geom_hline(yintercept = 1, linetype='dashed', color='blue'); figure
+```
